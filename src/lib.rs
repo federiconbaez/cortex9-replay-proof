@@ -12,6 +12,7 @@
 //! event log and the claimed stdout/stderr/exit/output tree) that a third
 //! party verifies by replaying it on the same absolute path.
 
+pub mod bundle;
 pub mod seccomp;
 pub mod syscalls;
 pub mod tree;
