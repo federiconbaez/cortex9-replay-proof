@@ -14,6 +14,7 @@
 
 pub mod seccomp;
 pub mod syscalls;
+pub mod tree;
 
 /// Hex-encoded SHA-256 of a byte slice.
 pub fn sha256_hex(data: &[u8]) -> String {
