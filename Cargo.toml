@@ -1,0 +1,23 @@
+[package]
+name = "replay-proof"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "Deterministic record/replay of single-threaded tool executions (seccomp + ptrace) with a bundle a third party can verify by replaying"
+repository = "https://github.com/federiconbaez/cortex9-replay-proof"
+readme = "README.md"
+keywords = ["record-replay", "seccomp", "ptrace", "determinism", "agents"]
+categories = ["os::linux-apis", "command-line-utilities"]
+authors = ["Federico Nicolas Báez Rizzo"]
+publish = false
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+flate2 = "1"
+
+[profile.release]
+debug = false
