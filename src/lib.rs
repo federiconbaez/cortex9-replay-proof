@@ -15,6 +15,7 @@
 pub mod bundle;
 pub mod seccomp;
 pub mod syscalls;
+pub mod tracer;
 pub mod tree;
 
 /// Hex-encoded SHA-256 of a byte slice.
