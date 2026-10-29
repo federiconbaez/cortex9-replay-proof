@@ -68,9 +68,9 @@ Las corridas que no se reproducen son **todas multihilo**, que está fuera de al
 
 | Caso | Por qué |
 |---|---|
-| `git-grep` | `git grep` reparte el trabajo en hilos; en replay otro hilo hace las `newfstatat` y el log de ese hilo no las tiene. Falla en las 5 corridas. |
-| `py-multiprocessing` | `multiprocessing.Pool` usa hilos de manejo en el padre; diverge en el orden de `clock_gettime`/`gettid`/`clone3`. Falla en las 5. |
-| `py-threading` | Un hilo que llama `time.time()`; según quién toma el GIL primero, el `clock_gettime` cae en otro hilo. Falla en 4 de 5 (pasó una vez por suerte de scheduling). |
+| `git-grep` | `git grep` reparte el trabajo en hilos; en replay otro hilo hace las `newfstatat` y el log de ese hilo no las tiene. Falla en las 5 corridas de la box; en el CI pasó en 1 de 2. |
+| `py-multiprocessing` | `multiprocessing.Pool` usa hilos de manejo en el padre; diverge en el orden de `clock_gettime`/`gettid`/`clone3`. Falla en las 5 de la box y en las 2 del CI. |
+| `py-threading` | Un hilo que llama `time.time()`; según quién toma el GIL primero, el `clock_gettime` cae en otro hilo. Falla en 4 de 5 en la box (pasó una vez por suerte de scheduling) y en las 2 del CI. |
 
 **(b) Overhead.** En el corpus (corridas de 1–40 ms, domina el arranque de procesos): grabar cuesta **×1.84–2.02** (media geométrica de tiempo grabado / nativo, según la corrida) y reproducir **×1.87–1.98**. El comando `record` completo (snapshot de entrada y salida, hash de ejecutables, sellado y escritura del bundle) cuesta ×3.01–3.20.
 
@@ -91,6 +91,25 @@ El peor caso es un programa que sólo pide la hora: sin vDSO cada `time.time()` 
 **Baselines rr y Hermit.** **rr 5.9.0** (`.deb` oficial) se instaló pero **no puede grabar en la box**: `Unable to open performance counter with 'perf_event_open'`, también como root y con `perf_event_paranoid=1`; la VM no expone una PMU de CPU (`/sys/bus/event_source/devices` no tiene `cpu`). El job `fidelity` del CI instala rr y reporta si en el runner puede. **Hermit 0.5.4**, compilado del fork mantenido [rrnewton/hermit](https://github.com/rrnewton/hermit) en `0e7fd4b` (el HEAD de facebookexperimental/hermit no compiló: `detcore-dbt` sin fuente), **sí corre** en la box sin contadores (avisa `--max-timeslice=disabled`). `hermit run --tmp=/tmp` sobre el mismo corpus: **×15.4** de media geométrica sobre los 98 casos con el mismo exit que el nativo (los dos `git gc` salen con 128 bajo Hermit, no lo investigué); en las cargas largas, la columna `hermit x` de la tabla. Ojo con la comparación: `hermit run` hace determinista la ejecución entera (incluido el scheduling de hilos, que acá está fuera de alcance), no es lo mismo que grabar. No medí `hermit record`. Hermit no está en el CI (compilarlo lleva un nightly fijado y varios minutos).
 
 **(c) Tamaño del log** (eventos comprimidos con deflate): las 100 corridas suman **≈544 KB** (≈5.4 KB por corrida; de 0.4 a 28 KB). Por segundo: **430–704 KB/s** de ejecución nativa y 226–361 KB/s de ejecución grabada (total del log / tiempo total, según la corrida); en las cargas largas, la columna `log B/s`: de 2.7 KB/s (jq, casi sin syscalls interceptadas) a 491 KB/s (`git log -p`, muchos `stat`). Cada corrida de Python pesa ≈11 KB o más sólo por el arranque: cientos de `newfstatat`/`fstat` al importar módulos y de `clock_gettime`.
+
+**En CI** (`ubuntu-latest`, kernel 7.0 de Azure, git 2.56; job `fidelity`):
+
+| Corrida | Idénticas | Control sin replay | Record / replay (corpus, media geom.) | `record` completo | Log |
+|---|---|---|---|---|---|
+| [push a main](https://github.com/federiconbaez/cortex9-replay-proof/actions/runs/40813365598) | **98/100** | 48/100 | ×2.78 / ×2.88 | ×4.01 | 759 KB; 927 KB/s nativo |
+| [PR #1](https://github.com/federiconbaez/cortex9-replay-proof/actions/runs/40813759565) | **97/100** | 49/100 | ×2.85 / ×2.96 | ×4.14 | 761 KB; 869 KB/s nativo |
+
+Cargas largas en el PR #1 (5 corridas, mediana):
+
+| workload | native | record | replay | record x | replay x | log B/s |
+|---|---|---|---|---|---|---|
+| time-syscalls-200k | 30 ms | 7051 ms | 7714 ms | 235.56 | 257.72 | 116312 |
+| cpu-bound-python | 137 ms | 165 ms | 166 ms | 1.21 | 1.22 | 103649 |
+| git-log-p-300 | 44 ms | 177 ms | 195 ms | 4.01 | 4.43 | 321460 |
+| jq-5mb | 198 ms | 229 ms | 230 ms | 1.16 | 1.16 | 3324 |
+| tar-gz-500-files | 8 ms | 79 ms | 87 ms | 9.99 | 10.96 | 246664 |
+
+En el runner rr tampoco graba: con `perf_event_paranoid=1` falla igual que en la box (`Unable to open performance counter`) y no hay PMU de CPU en `/sys/bus/event_source/devices`. Hermit no se instala en el CI. Los logs del runner son más grandes que en la box; no comparé evento por evento, pero git, Python y las librerías del runner son otras versiones.
 
 ### Uso
 
@@ -176,6 +195,8 @@ Control: running twice **without** replay-proof gives identical output and effec
 **rr and Hermit baselines.** **rr 5.9.0** (official `.deb`) installs but **cannot record on the box**: `Unable to open performance counter with 'perf_event_open'`, also as root with `perf_event_paranoid=1`; the VM exposes no CPU PMU. The CI `fidelity` job installs rr and reports whether it works on the runner. **Hermit 0.5.4**, built from the maintained fork rrnewton/hermit at `0e7fd4b` (facebookexperimental/hermit's HEAD did not build), **does run** on the box without counters. `hermit run --tmp=/tmp` on the same corpus: **×15.4** geometric mean over the 98 cases with the native exit code (both `git gc` cases exit 128 under Hermit; not investigated); for the long workloads see the `hermit x` column. Caveat: `hermit run` determinizes the whole execution, thread scheduling included (out of scope here); it is not the same job as recording. `hermit record` was not measured, and Hermit is not in CI (it needs a pinned nightly and several minutes to build).
 
 **(c) Log size** (deflate-compressed events): the 100 runs add up to **≈544 KB** (≈5.4 KB per run; 0.4 to 28 KB). Per second: **430–704 KB/s** of native execution and 226–361 KB/s of recorded execution (total log / total time, depending on the run); for the long workloads see the `log B/s` column, from 2.7 KB/s (jq, almost no intercepted calls) to 491 KB/s (`git log -p`, many `stat` calls).
+
+**In CI** (`ubuntu-latest`, Azure kernel 7.0, git 2.56; `fidelity` job): the [push to main](https://github.com/federiconbaez/cortex9-replay-proof/actions/runs/40813365598) run reproduced **98/100** (control 48/100; record ×2.78, replay ×2.88, whole `record` ×4.01; 759 KB of log, 927 KB per native second) and the [PR #1](https://github.com/federiconbaez/cortex9-replay-proof/actions/runs/40813759565) run **97/100** (control 49/100; ×2.85 / ×2.96 / ×4.14; 761 KB, 869 KB/s). Long workloads on PR #1 are in the Spanish table (worst case again `time-syscalls-200k`, ×236). rr cannot record on the runner either: with `perf_event_paranoid=1` it fails like on the box, and there is no CPU PMU. Hermit is not installed in CI.
 
 ### Usage and tests
 
