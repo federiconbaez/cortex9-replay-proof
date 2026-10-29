@@ -132,6 +132,15 @@ def rr_status():
     return True, "ok"
 
 
+def hermit_status():
+    if shutil.which("hermit") is None:
+        return False, "hermit is not installed on this host"
+    p = subprocess.run(["hermit", "run", "--", "/bin/true"], capture_output=True, text=True)
+    if p.returncode != 0:
+        return False, "hermit run failed: " + (p.stderr.strip().splitlines() or ["?"])[-1]
+    return True, "ok"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default="target/release/replay-proof")
@@ -152,6 +161,7 @@ def main():
     with open(envfile, "w") as f:
         f.write("".join(f"{k}={v}\n" for k, v in env.items()))
     rr_ok, rr_why = rr_status()
+    hermit_ok, hermit_why = hermit_status()
     cases = CASES
     if a.only:
         keep = set(a.only.split(","))
@@ -209,7 +219,8 @@ def main():
             shutil.rmtree(trace, ignore_errors=True)
             t0 = time.perf_counter()
             try:
-                q = subprocess.run(["rr", "record", "-n", "-o", trace, "sh", "-c", cmd], cwd=w,
+                q = subprocess.run([shutil.which("rr"), "record", "-n", "-o", trace, "sh", "-c", cmd],
+                                   cwd=w,
                                    env=env, stdin=subprocess.DEVNULL, capture_output=True,
                                    timeout=a.timeout)
             except subprocess.TimeoutExpired:
@@ -217,6 +228,18 @@ def main():
             r["rr_secs"] = time.perf_counter() - t0
             r["rr_rc"] = q.returncode
             shutil.rmtree(trace, ignore_errors=True)
+        if hermit_ok:
+            fresh(os.path.join(fx, fixture), w)
+            t0 = time.perf_counter()
+            try:
+                q = subprocess.run([shutil.which("hermit"), "run", "--tmp=/tmp", "--", "/bin/sh", "-c", cmd],
+                                   cwd=w, env=env,
+                                   stdin=subprocess.DEVNULL, capture_output=True,
+                                   timeout=a.timeout)
+                r["hermit_rc"] = q.returncode
+            except subprocess.TimeoutExpired:
+                r["hermit_rc"] = "timeout"
+            r["hermit_secs"] = time.perf_counter() - t0
         results.append(r)
         status = "IDENTICAL" if r.get("identical") else "DIFFERENT"
         print(f"{cid:28} {status:9} naive_rerun_identical={r['naive_rerun_identical']!s:5} "
@@ -260,6 +283,12 @@ def main():
         rr_ratios = [r["rr_secs"] / r["native_secs"] for r in timed if r.get("rr_rc") == 0]
         summary["rr_record_overhead_geomean"] = geo(rr_ratios)
         summary["rr_cases_ok"] = len(rr_ratios)
+    summary["hermit"] = hermit_why
+    if hermit_ok:
+        hm = [r["hermit_secs"] / r["native_secs"] for r in timed
+              if r.get("hermit_rc") == r.get("native_rc")]
+        summary["hermit_run_overhead_geomean"] = geo(hm)
+        summary["hermit_cases_same_rc"] = len(hm)
     with open(os.path.join(a.out, "fidelity.json"), "w") as f:
         json.dump({"summary": summary, "results": results}, f, indent=1, default=str)
     lines = [
@@ -276,6 +305,10 @@ def main():
         f"(median per run {summary['event_log_bytes_per_sec_median']:.0f} B/s)" if timed else "",
         f"rr: {rr_why}" + (f", record overhead geomean x{summary['rr_record_overhead_geomean']:.2f} "
                            f"over {summary['rr_cases_ok']} runs" if rr_ok and summary.get("rr_record_overhead_geomean") else ""),
+        f"hermit: {hermit_why}" + (f", `hermit run` overhead geomean "
+                                   f"x{summary['hermit_run_overhead_geomean']:.2f} over "
+                                   f"{summary['hermit_cases_same_rc']} runs with the native exit code"
+                                   if hermit_ok and summary.get("hermit_run_overhead_geomean") else ""),
         "failures:",
     ] + [f"- {x['id']} (multithreaded={x['multithreaded']}): {json.dumps(x['why'])[:400]}"
          for x in summary["failures"]]

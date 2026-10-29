@@ -114,7 +114,7 @@ def main():
                 tr = os.path.join(a.base, "rr-trace")
                 shutil.rmtree(tr, ignore_errors=True)
                 t0 = time.perf_counter()
-                q = subprocess.run(["rr", "record", "-n", "-o", tr, "sh", "-c", cmd], cwd=w,
+                q = subprocess.run([shutil.which("rr"), "record", "-n", "-o", tr, "sh", "-c", cmd], cwd=w,
                                    env=env, stdin=subprocess.DEVNULL, capture_output=True)
                 if q.returncode == 0:
                     rrs.append(time.perf_counter() - t0)
@@ -123,7 +123,7 @@ def main():
             if hermit_why is None:
                 fresh(fx, w)
                 t0 = time.perf_counter()
-                q = subprocess.run(["hermit", "run", "--", "/bin/sh", "-c", cmd], cwd=w,
+                q = subprocess.run([shutil.which("hermit"), "run", "--tmp=/tmp", "--", "/bin/sh", "-c", cmd], cwd=w,
                                    env=env, stdin=subprocess.DEVNULL, capture_output=True)
                 if q.returncode == 0:
                     hms.append(time.perf_counter() - t0)
