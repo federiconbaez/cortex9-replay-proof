@@ -61,8 +61,10 @@ jobs:
           curl -sSfL -o /tmp/rr.deb https://github.com/rr-debugger/rr/releases/download/5.9.0/rr-5.9.0-Linux-x86_64.deb
           sudo dpkg -i /tmp/rr.deb
           rr --version
+          # rr refuses with the default paranoid level (4 on the runner) before
+          # it even looks for a PMU; lower it so the probe reports the real cause.
+          sudo sysctl -w kernel.perf_event_paranoid=1
           ls /sys/bus/event_source/devices/
-          cat /proc/sys/kernel/perf_event_paranoid
       - name: Fidelity (fails below 95/100 identical)
         run: python3 scripts/fidelity.py --out work/fidelity
       - name: Overhead on longer workloads (fails if a replay differs)
