@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt · clippy · unit tests
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Unit tests
+        run: cargo test --lib --locked
+      - name: Python scripts compile
+        run: python3 -m py_compile scripts/*.py
+
+  e2e:
+    name: end-to-end record/verify (ptrace + seccomp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Host
+        run: |
+          uname -r
+          cat /proc/sys/kernel/yama/ptrace_scope || true
+          git --version; jq --version; python3 --version
+      - name: Integration tests (fail, never skip, without ptrace/seccomp)
+        run: cargo test --release --locked --test replay -- --nocapture
+
+  fidelity:
+    name: 100-run fidelity corpus + overhead
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Install rr 5.9.0 (baseline; the scripts report whether it can record here)
+        run: |
+          curl -sSfL -o /tmp/rr.deb https://github.com/rr-debugger/rr/releases/download/5.9.0/rr-5.9.0-Linux-x86_64.deb
+          sudo dpkg -i /tmp/rr.deb
+          rr --version
+          ls /sys/bus/event_source/devices/
+          cat /proc/sys/kernel/perf_event_paranoid
+      - name: Fidelity (fails below 95/100 identical)
+        run: python3 scripts/fidelity.py --out work/fidelity
+      - name: Overhead on longer workloads (fails if a replay differs)
+        run: python3 scripts/overhead.py --runs 5 --out work/overhead
+      - name: Summary
+        if: always()
+        run: |
+          { echo '## Fidelity'; echo '```'; cat work/fidelity/fidelity.md || true; echo '```';
+            echo '## Overhead'; cat work/overhead/overhead.md || true; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: measurements
+          path: |
+            work/fidelity/fidelity.json
+            work/fidelity/fidelity.md
+            work/overhead/overhead.json
+            work/overhead/overhead.md
+          if-no-files-found: error
