@@ -14,6 +14,7 @@
 
 pub mod bundle;
 pub mod seccomp;
+pub mod session;
 pub mod syscalls;
 pub mod tracer;
 pub mod tree;
